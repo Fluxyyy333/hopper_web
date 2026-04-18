@@ -126,27 +126,40 @@ echo "    curl   : $(command -v curl || echo MISSING)"
 echo "    sqlite3: $(command -v sqlite3 || echo MISSING)"
 
 echo ""
-echo "[2/7] Device config"
-read -rp "    Device ID (unique, contoh '01'): " DEVICE_ID
-DEVICE_ID="${DEVICE_ID:-01}"
-read -rp "    Roblox package name [com.deltb]: " PKG
-PKG="${PKG:-com.deltb}"
-read -rp "    Hop interval (menit) [12]: " HOP
-HOP="${HOP:-12}"
+echo "[2/7] Device identity (auto HWID)..."
+HWID_FILE="$HOME/.hopper_hwid"
+if [ -f "$HWID_FILE" ] && [ -s "$HWID_FILE" ]; then
+  DEVICE_ID=$(cat "$HWID_FILE")
+  echo "    Reused HWID : $DEVICE_ID"
+else
+  RAW_SERIAL=$(getprop ro.serialno 2>/dev/null || true)
+  if [ -z "$RAW_SERIAL" ] || [ "$RAW_SERIAL" = "unknown" ]; then
+    RAW_SERIAL=$(cat /proc/sys/kernel/random/uuid)
+  fi
+  DEVICE_ID=$(printf '%s' "$RAW_SERIAL" | sha256sum | cut -c1-16)
+  printf '%s' "$DEVICE_ID" > "$HWID_FILE"
+  echo "    New HWID    : $DEVICE_ID"
+fi
+DISPLAY_NAME="RF-$(printf '%s' "$DEVICE_ID" | cut -c1-6)"
+PKG="com.deltb"
+HOP="12"
+echo "    Display name: $DISPLAY_NAME (rename di dashboard > Devices)"
+echo "    Pkg         : $PKG"
+echo "    Hop         : $HOP menit"
 
 echo ""
-echo "[3/7] Writing config to /sdcard..."
-printf '%s' "$SERVER_URL" > /sdcard/.hopper_server
-printf '%s' "$DEVICE_ID"  > /sdcard/.hopper_devid
-printf '%s' "$LICENSE"    > /sdcard/.hopper_license
-printf '%s' "$PKG"        > /sdcard/.hopper_pkg
-printf '%s' "$HOP"        > /sdcard/.hopper_hop
-printf 'regular'          > /sdcard/.hopper_mode
+echo "[3/7] Writing config to \$HOME..."
+printf '%s' "$SERVER_URL" > "$HOME/.hopper_server"
+printf '%s' "$DEVICE_ID"  > "$HOME/.hopper_devid"
+printf '%s' "$LICENSE"    > "$HOME/.hopper_license"
+printf '%s' "$PKG"        > "$HOME/.hopper_pkg"
+printf '%s' "$HOP"        > "$HOME/.hopper_hop"
+printf 'regular'          > "$HOME/.hopper_mode"
 
 echo "[4/7] Downloading hopper.lua (rendered from backend)..."
-curl -fsSL -H "X-License: $LICENSE" "$SERVER_URL/api/installer/hopper.lua" -o /sdcard/hopper.lua
-echo "    $(wc -l < /sdcard/hopper.lua) lines"
-if ! grep -q 'Daemon v2' /sdcard/hopper.lua; then
+curl -fsSL -H "X-License: $LICENSE" "$SERVER_URL/api/installer/hopper.lua" -o "$HOME/hopper.lua"
+echo "    $(wc -l < "$HOME/hopper.lua") lines"
+if ! grep -q 'Daemon v2' "$HOME/hopper.lua"; then
   echo "[x] Downloaded hopper.lua looks invalid. Periksa license."
   exit 1
 fi
@@ -155,11 +168,11 @@ echo "[5/7] Registering device with backend..."
 REGISTER_RESP=$(curl -fsS -X POST "$SERVER_URL/api/devices/register" \
   -H "Content-Type: application/json" \
   -H "X-License: $LICENSE" \
-  -d "{\"id\":\"$DEVICE_ID\",\"name\":\"$DEVICE_ID\",\"pkg_name\":\"$PKG\"}")
+  -d "{\"id\":\"$DEVICE_ID\",\"name\":\"$DISPLAY_NAME\",\"pkg_name\":\"$PKG\"}")
 echo "    Response: $REGISTER_RESP"
 
 if echo "$REGISTER_RESP" | grep -q '"error"'; then
-  echo "[x] Registration failed. Periksa license + device_id."
+  echo "[x] Registration failed. Periksa license."
   exit 1
 fi
 
@@ -168,7 +181,7 @@ pgrep -x lua | xargs -r kill 2>/dev/null || true
 sleep 1
 
 echo "[7/7] Starting hopper daemon..."
-setsid -f lua /sdcard/hopper.lua </dev/null >/sdcard/hopper_daemon.log 2>&1
+setsid -f lua "$HOME/hopper.lua" </dev/null >"$HOME/hopper_daemon.log" 2>&1
 sleep 2
 
 PID=$(pgrep -x lua || true)
@@ -178,12 +191,14 @@ if [ -n "$PID" ]; then
   echo "   SUCCESS — daemon running (PID=$PID)"
   echo "==========================================="
   echo ""
-  echo "   Tail log:  tail -f /sdcard/hopper_daemon.log"
-  echo "   Dashboard: http://203.194.114.193:5173"
+  echo "   HWID       : $DEVICE_ID"
+  echo "   Display    : $DISPLAY_NAME (rename di dashboard)"
+  echo "   Tail log   : tail -f \$HOME/hopper_daemon.log"
+  echo "   Dashboard  : http://203.194.114.193:3000"
   echo ""
-  echo "   Device-mu akan muncul di dashboard akun yang sesuai."
+  echo "   Device muncul di dashboard akun yang sesuai."
 else
-  echo "[x] Daemon failed to start. Cek /sdcard/hopper_daemon.log:"
-  tail -n 20 /sdcard/hopper_daemon.log 2>/dev/null || true
+  echo "[x] Daemon failed to start. Cek \$HOME/hopper_daemon.log:"
+  tail -n 20 "$HOME/hopper_daemon.log" 2>/dev/null || true
   exit 1
 fi
