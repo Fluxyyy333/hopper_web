@@ -25,19 +25,20 @@ if ! echo "$LICENSE" | grep -qE '^[A-F0-9]{32}$'; then
   exit 1
 fi
 
-echo "[1/7] Install dependencies (lua, curl)..."
+echo "[1/7] Install dependencies (lua, curl, sqlite)..."
 # Sync package index + upgrade existing libs first — avoids ABI mismatch
 # (e.g. libngtcp2_crypto_ossl.so vs stale openssl → curl segfault)
 yes | pkg update -y 2>&1 | tail -3 || true
 yes | pkg upgrade -y 2>&1 | tail -3 || true
-yes | pkg install -y lua54 curl 2>&1 | tail -3 || yes | pkg install -y lua curl
+yes | pkg install -y lua54 curl sqlite 2>&1 | tail -3 || yes | pkg install -y lua curl sqlite
 if ! command -v lua >/dev/null 2>&1; then
   if command -v lua5.4 >/dev/null 2>&1; then
     ln -sf "$(command -v lua5.4)" "$PREFIX/bin/lua"
   fi
 fi
-echo "    lua : $(command -v lua || echo MISSING)"
-echo "    curl: $(command -v curl || echo MISSING)"
+echo "    lua    : $(command -v lua || echo MISSING)"
+echo "    curl   : $(command -v curl || echo MISSING)"
+echo "    sqlite3: $(command -v sqlite3 || echo MISSING)"
 
 echo ""
 echo "[2/7] Device config"
