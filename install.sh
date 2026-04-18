@@ -140,10 +140,9 @@ else
   printf '%s' "$DEVICE_ID" > "$HWID_FILE"
   echo "    New HWID    : $DEVICE_ID"
 fi
-DISPLAY_NAME="RF-$(printf '%s' "$DEVICE_ID" | cut -c1-6)"
 PKG="com.deltb"
 HOP="12"
-echo "    Display name: $DISPLAY_NAME (rename di dashboard > Devices)"
+echo "    Display name: <auto-assign RF-NN di backend>"
 echo "    Pkg         : $PKG"
 echo "    Hop         : $HOP menit"
 
@@ -168,13 +167,16 @@ echo "[5/7] Registering device with backend..."
 REGISTER_RESP=$(curl -fsS -X POST "$SERVER_URL/api/devices/register" \
   -H "Content-Type: application/json" \
   -H "X-License: $LICENSE" \
-  -d "{\"id\":\"$DEVICE_ID\",\"name\":\"$DISPLAY_NAME\",\"pkg_name\":\"$PKG\"}")
+  -d "{\"id\":\"$DEVICE_ID\",\"pkg_name\":\"$PKG\"}")
 echo "    Response: $REGISTER_RESP"
 
 if echo "$REGISTER_RESP" | grep -q '"error"'; then
   echo "[x] Registration failed. Periksa license."
   exit 1
 fi
+
+DISPLAY_NAME=$(printf '%s' "$REGISTER_RESP" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+[ -z "$DISPLAY_NAME" ] && DISPLAY_NAME="(unknown)"
 
 echo "[6/7] Killing old hopper daemon..."
 pgrep -x lua | xargs -r kill 2>/dev/null || true
