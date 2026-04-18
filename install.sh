@@ -25,12 +25,97 @@ if ! echo "$LICENSE" | grep -qE '^[A-F0-9]{32}$'; then
   exit 1
 fi
 
+# ============================================================
+# Mirror fallback + retry helpers (adapted from wintercode installer)
+# Handles flaky Termux mirrors: sync lag, NO_PUBKEY, size mismatch, etc.
+# ============================================================
+FALLBACK_MIRRORS=(
+  "https://packages-cf.termux.dev/apt/termux-main"
+  "https://packages.termux.dev/apt/termux-main"
+  "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"
+  "https://mirrors.ustc.edu.cn/termux/termux-main"
+  "https://grimler.se/termux/termux-main"
+  "https://mirror.quantum5.ca/termux/termux-main"
+)
+APT_DIR="$PREFIX/etc/apt"
+APT_LISTS="$PREFIX/var/lib/apt/lists"
+_MIRROR_IDX=0
+
+switch_mirror() {
+  local mirror="${FALLBACK_MIRRORS[$_MIRROR_IDX]}"
+  _MIRROR_IDX=$(( (_MIRROR_IDX + 1) % ${#FALLBACK_MIRRORS[@]} ))
+  echo "    -> switch mirror: $mirror"
+  rm -rf "$APT_LISTS"/* 2>/dev/null
+  echo "deb $mirror stable main" > "$APT_DIR/sources.list"
+  if [ -d "$APT_DIR/sources.list.d" ]; then
+    for f in "$APT_DIR/sources.list.d"/*.list; do
+      [ -f "$f" ] || continue
+      sed -i "s|deb [^ ]*/termux-main|deb $mirror|" "$f" 2>/dev/null
+    done
+  fi
+}
+
+is_mirror_error() {
+  echo "$1" | grep -qiE "unexpected size|Mirror sync in progress|Failed to fetch|Some index files failed|does not have a Release file|Redirection from https|is not signed|NO_PUBKEY"
+}
+
+pkg_update_retry() {
+  local attempt=0 max=6 rc out
+  while [ $attempt -lt $max ]; do
+    rc=0
+    out=$(pkg update -y 2>&1) || rc=$?
+    echo "$out" | tail -3
+    if [ $rc -eq 0 ]; then
+      return 0
+    fi
+    if is_mirror_error "$out"; then
+      attempt=$((attempt + 1))
+      echo "    mirror error ($attempt/$max), switch mirror..."
+      switch_mirror
+      sleep 2
+    else
+      echo "[x] pkg update failed: non-mirror error"
+      return 1
+    fi
+  done
+  echo "[x] pkg update gagal setelah $max percobaan"
+  return 1
+}
+
+pkg_install_retry() {
+  local pkg="$1" attempt=0 max=4 rc out
+  while [ $attempt -lt $max ]; do
+    rc=0
+    out=$(pkg install -y "$pkg" 2>&1) || rc=$?
+    echo "$out" | tail -3
+    if [ $rc -eq 0 ]; then
+      return 0
+    fi
+    if is_mirror_error "$out"; then
+      attempt=$((attempt + 1))
+      echo "    $pkg mirror error ($attempt/$max), retry update..."
+      pkg_update_retry || true
+    else
+      echo "[x] $pkg install failed: non-mirror error"
+      return 1
+    fi
+  done
+  echo "[x] $pkg gagal setelah $max percobaan"
+  return 1
+}
+
 echo "[1/7] Install dependencies (lua, curl, sqlite)..."
 # Sync package index + upgrade existing libs first — avoids ABI mismatch
 # (e.g. libngtcp2_crypto_ossl.so vs stale openssl → curl segfault)
-yes | pkg update -y 2>&1 | tail -3 || true
-yes | pkg upgrade -y 2>&1 | tail -3 || true
-yes | pkg install -y lua54 curl sqlite 2>&1 | tail -3 || yes | pkg install -y lua curl sqlite
+pkg_update_retry || { echo "[x] Tidak bisa update package index. Abort."; exit 1; }
+
+echo "    pkg upgrade (sync libs)..."
+DEBIAN_FRONTEND=noninteractive pkg upgrade -y -o Dpkg::Options::="--force-confnew" 2>&1 | tail -3 || true
+
+pkg_install_retry lua54 || pkg_install_retry lua || { echo "[x] Gagal install lua"; exit 1; }
+pkg_install_retry curl   || { echo "[x] Gagal install curl"; exit 1; }
+pkg_install_retry sqlite || { echo "[x] Gagal install sqlite"; exit 1; }
+
 if ! command -v lua >/dev/null 2>&1; then
   if command -v lua5.4 >/dev/null 2>&1; then
     ln -sf "$(command -v lua5.4)" "$PREFIX/bin/lua"
